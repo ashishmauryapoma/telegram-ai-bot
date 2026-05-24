@@ -1,0 +1,4 @@
+memory.json
+chat_history.txt
+.env
+__pycache__/
