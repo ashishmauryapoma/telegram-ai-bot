@@ -13,236 +13,217 @@ from telegram.ext import (
     filters,
 )
 
-# ==========================================
-# ENVIRONMENT VARIABLES
-# ==========================================
+# =========================
+# ENV VARIABLES
+# =========================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# ==========================================
-# PASSWORD
-# ==========================================
-
-BOT_PASSWORD = "Ashish"
-
-# ==========================================
-# GROQ CLIENT
-# ==========================================
-
 client = Groq(api_key=GROQ_API_KEY)
 
-# ==========================================
-# FILES
-# ==========================================
+# =========================
+# ADMIN CONFIG
+# =========================
+
+ADMIN_ID = 7239128382  # 🔴 CHANGE THIS to your Telegram ID
+
+def is_admin(user_id):
+    return int(user_id) == ADMIN_ID
+
+# =========================
+# FILE STORAGE
+# =========================
 
 MEMORY_FILE = "memory.json"
-CHAT_LOG_FILE = "chat_history.txt"
-
-# ==========================================
-# LOAD MEMORY
-# ==========================================
 
 if os.path.exists(MEMORY_FILE):
-
     with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-        user_conversations = json.load(f)
-
+        user_memory = json.load(f)
 else:
-    user_conversations = {}
+    user_memory = {}
 
-# ==========================================
-# AUTHENTICATED USERS
-# ==========================================
+# =========================
+# USER TRACKING
+# =========================
 
-authenticated_users = set()
+user_stats = {}
 
-# ==========================================
+# =========================
 # SAVE MEMORY
-# ==========================================
-
+# =========================
 
 def save_memory():
-
     with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_conversations, f, ensure_ascii=False, indent=4)
+        json.dump(user_memory, f, indent=4)
 
-# ==========================================
+# =========================
 # START COMMAND
-# ==========================================
-
+# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
-        "🔐 Welcome to AI Chat Bot!\n\n"
-        "Please enter the password to continue."
+        "🤖 Welcome to AI Bot!\n\nSend me a message to chat."
     )
 
-# ==========================================
-# RESET COMMAND
-# ==========================================
-
+# =========================
+# RESET MEMORY
+# =========================
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user_id = str(update.message.from_user.id)
 
-    if user_id in user_conversations:
-        del user_conversations[user_id]
+    if user_id in user_memory:
+        del user_memory[user_id]
         save_memory()
 
+    await update.message.reply_text("🧠 Your memory has been reset.")
+
+# =========================
+# ADMIN STATS
+# =========================
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Not authorized")
+        return
+
+    total_users = len(user_stats)
+    total_messages = sum(u["messages"] for u in user_stats.values())
+
     await update.message.reply_text(
-        "🧠 Memory reset successfully."
+        f"📊 BOT STATS\n\n"
+        f"👥 Users: {total_users}\n"
+        f"💬 Messages: {total_messages}"
     )
 
-# ==========================================
-# MAIN MESSAGE HANDLER
-# ==========================================
+# =========================
+# USER LIST
+# =========================
 
+async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Not authorized")
+        return
+
+    text = "👤 USERS LIST\n\n"
+
+    for uid, data in user_stats.items():
+        text += f"- {data['username']} | {data['messages']} msgs\n"
+
+    await update.message.reply_text(text or "No users yet.")
+
+# =========================
+# BROADCAST
+# =========================
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Not authorized")
+        return
+
+    message = " ".join(context.args)
+
+    if not message:
+        await update.message.reply_text("Usage: /broadcast your message")
+        return
+
+    for uid in user_stats:
+        try:
+            await context.bot.send_message(chat_id=uid, text=message)
+        except:
+            pass
+
+    await update.message.reply_text("📢 Broadcast sent!")
+
+# =========================
+# MAIN CHAT HANDLER
+# =========================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = str(update.message.from_user.id)
-    username = update.message.from_user.username
-    user_message = update.message.text
+    username = update.message.from_user.username or "unknown"
+    message = update.message.text
 
-    # ==========================================
-    # PASSWORD CHECK
-    # ==========================================
+    # -------------------------
+    # TRACK USER
+    # -------------------------
 
-    if user_id not in authenticated_users:
+    if user_id not in user_stats:
+        user_stats[user_id] = {
+            "username": username,
+            "messages": 0,
+            "last_active": str(datetime.now())
+        }
 
-        if user_message == BOT_PASSWORD:
+    user_stats[user_id]["messages"] += 1
+    user_stats[user_id]["last_active"] = str(datetime.now())
 
-            authenticated_users.add(user_id)
+    # -------------------------
+    # MEMORY INIT
+    # -------------------------
 
-            await update.message.reply_text(
-                "✅ Password correct!\n\n"
-                "You can now chat with the AI 🤖"
-            )
-
-        else:
-
-            await update.message.reply_text(
-                "❌ Wrong password. Try again."
-            )
-
-        return
-
-    # ==========================================
-    # CREATE MEMORY FOR NEW USER
-    # ==========================================
-
-    if user_id not in user_conversations:
-
-        user_conversations[user_id] = [
+    if user_id not in user_memory:
+        user_memory[user_id] = [
             {
                 "role": "system",
-                "content": """
-You are a friendly AI chatbot.
-
-Rules:
-- Be friendly and conversational
-- Answer general questions clearly
-- Keep replies simple and natural
-- Use emojis occasionally
-- Be helpful and engaging
-"""
+                "content": "You are a friendly AI chatbot. Keep answers short, helpful, and natural."
             }
         ]
 
-    # ==========================================
-    # SAVE USER MESSAGE
-    # ==========================================
+    user_memory[user_id].append({
+        "role": "user",
+        "content": message
+    })
 
-    user_conversations[user_id].append(
-        {
-            "role": "user",
-            "content": user_message
-        }
-    )
-
-    # Keep only recent messages
-    user_conversations[user_id] = user_conversations[user_id][-20:]
+    user_memory[user_id] = user_memory[user_id][-20:]
 
     try:
 
-        # ==========================================
-        # AI RESPONSE
-        # ==========================================
-
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=user_conversations[user_id]
+            messages=user_memory[user_id]
         )
 
-        ai_reply = response.choices[0].message.content
+        reply = response.choices[0].message.content
 
-        # ==========================================
-        # SAVE AI RESPONSE
-        # ==========================================
-
-        user_conversations[user_id].append(
-            {
-                "role": "assistant",
-                "content": ai_reply
-            }
-        )
+        user_memory[user_id].append({
+            "role": "assistant",
+            "content": reply
+        })
 
         save_memory()
 
-        # ==========================================
-        # CHAT LOGGING
-        # ==========================================
-
-        with open(CHAT_LOG_FILE, "a", encoding="utf-8") as file:
-
-            current_time = datetime.now().strftime(
-                "%Y-%m-%d %I:%M %p"
-            )
-
-            file.write(f"\n[{current_time}]\n")
-            file.write(f"User ({username}): {user_message}\n")
-            file.write(f"Bot: {ai_reply}\n")
-            file.write("-" * 50 + "\n")
-
-        # ==========================================
-        # SEND REPLY
-        # ==========================================
-
-        await update.message.reply_text(ai_reply)
+        await update.message.reply_text(reply)
 
     except Exception as e:
+        print(e)
+        await update.message.reply_text("⚠️ AI error occurred.")
 
-        print("ERROR:", e)
-
-        await update.message.reply_text(
-            "⚠️ AI error occurred. Please try again later."
-        )
-
-# ==========================================
-# BUILD BOT
-# ==========================================
+# =========================
+# BOT SETUP
+# =========================
 
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-# Commands
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("reset", reset))
 
+# Admin commands
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("users", users))
+app.add_handler(CommandHandler("broadcast", broadcast))
+
 # Messages
-app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_message
-    )
-)
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-print("🤖 AI Chat Bot is running...")
-
-# ==========================================
-# START BOT
-# ==========================================
+print("🤖 AI Bot with Admin Panel is running...")
 
 app.run_polling()
