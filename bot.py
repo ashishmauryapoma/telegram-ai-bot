@@ -1,7 +1,9 @@
 import os
 import json
 from datetime import datetime
+from threading import Thread
 
+from flask import Flask
 from groq import Groq
 
 from telegram import Update
@@ -23,189 +25,137 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY)
 
 # =========================
-# ADMIN CONFIG
+# FLASK APP (IMPORTANT FOR RENDER)
 # =========================
 
-ADMIN_ID = 7239128382  # 🔴 CHANGE THIS to your Telegram ID
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "🤖 Telegram AI Bot is Running"
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=10000)
+
+Thread(target=run_flask).start()
+
+# =========================
+# ADMIN SETUP
+# =========================
+
+ADMIN_ID = 7239128382  # 🔴 replace with your Telegram ID
 
 def is_admin(user_id):
     return int(user_id) == ADMIN_ID
 
 # =========================
-# FILE STORAGE
+# STORAGE
 # =========================
 
 MEMORY_FILE = "memory.json"
 
 if os.path.exists(MEMORY_FILE):
     with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-        user_memory = json.load(f)
+        memory = json.load(f)
 else:
-    user_memory = {}
-
-# =========================
-# USER TRACKING
-# =========================
+    memory = {}
 
 user_stats = {}
 
-# =========================
-# SAVE MEMORY
-# =========================
-
 def save_memory():
     with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_memory, f, indent=4)
+        json.dump(memory, f, indent=4)
 
 # =========================
-# START COMMAND
+# START
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Welcome to AI Bot!\n\nSend me a message to chat."
-    )
+    await update.message.reply_text("🤖 AI Bot is active! Chat with me.")
 
 # =========================
-# RESET MEMORY
+# RESET
 # =========================
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.message.from_user.id)
-
-    if user_id in user_memory:
-        del user_memory[user_id]
+    uid = str(update.message.from_user.id)
+    if uid in memory:
+        del memory[uid]
         save_memory()
 
-    await update.message.reply_text("🧠 Your memory has been reset.")
+    await update.message.reply_text("🧠 Memory cleared!")
 
 # =========================
 # ADMIN STATS
 # =========================
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Not authorized")
+    uid = update.message.from_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("❌ Not allowed")
         return
 
     total_users = len(user_stats)
-    total_messages = sum(u["messages"] for u in user_stats.values())
+    total_msgs = sum(u["messages"] for u in user_stats.values())
 
     await update.message.reply_text(
-        f"📊 BOT STATS\n\n"
-        f"👥 Users: {total_users}\n"
-        f"💬 Messages: {total_messages}"
+        f"📊 STATS\n\n👥 Users: {total_users}\n💬 Messages: {total_msgs}"
     )
 
 # =========================
-# USER LIST
+# USER TRACKING
 # =========================
 
-async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Not authorized")
-        return
-
-    text = "👤 USERS LIST\n\n"
-
-    for uid, data in user_stats.items():
-        text += f"- {data['username']} | {data['messages']} msgs\n"
-
-    await update.message.reply_text(text or "No users yet.")
-
-# =========================
-# BROADCAST
-# =========================
-
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Not authorized")
-        return
-
-    message = " ".join(context.args)
-
-    if not message:
-        await update.message.reply_text("Usage: /broadcast your message")
-        return
-
-    for uid in user_stats:
-        try:
-            await context.bot.send_message(chat_id=uid, text=message)
-        except:
-            pass
-
-    await update.message.reply_text("📢 Broadcast sent!")
-
-# =========================
-# MAIN CHAT HANDLER
-# =========================
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = str(update.message.from_user.id)
-    username = update.message.from_user.username or "unknown"
-    message = update.message.text
-
-    # -------------------------
-    # TRACK USER
-    # -------------------------
-
-    if user_id not in user_stats:
-        user_stats[user_id] = {
+def track_user(uid, username):
+    if uid not in user_stats:
+        user_stats[uid] = {
             "username": username,
             "messages": 0,
             "last_active": str(datetime.now())
         }
 
-    user_stats[user_id]["messages"] += 1
-    user_stats[user_id]["last_active"] = str(datetime.now())
+    user_stats[uid]["messages"] += 1
+    user_stats[uid]["last_active"] = str(datetime.now())
 
-    # -------------------------
-    # MEMORY INIT
-    # -------------------------
+# =========================
+# MAIN CHAT
+# =========================
 
-    if user_id not in user_memory:
-        user_memory[user_id] = [
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    uid = str(update.message.from_user.id)
+    username = update.message.from_user.username or "unknown"
+    msg = update.message.text
+
+    track_user(uid, username)
+
+    if uid not in memory:
+        memory[uid] = [
             {
                 "role": "system",
-                "content": "You are a friendly AI chatbot. Keep answers short, helpful, and natural."
+                "content": "You are a friendly AI chatbot. Keep answers short and helpful."
             }
         ]
 
-    user_memory[user_id].append({
-        "role": "user",
-        "content": message
-    })
-
-    user_memory[user_id] = user_memory[user_id][-20:]
+    memory[uid].append({"role": "user", "content": msg})
+    memory[uid] = memory[uid][-20:]
 
     try:
-
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=user_memory[user_id]
+            messages=memory[uid]
         )
 
         reply = response.choices[0].message.content
 
-        user_memory[user_id].append({
-            "role": "assistant",
-            "content": reply
-        })
-
+        memory[uid].append({"role": "assistant", "content": reply})
         save_memory()
 
         await update.message.reply_text(reply)
 
     except Exception as e:
         print(e)
-        await update.message.reply_text("⚠️ AI error occurred.")
+        await update.message.reply_text("⚠️ AI error")
 
 # =========================
 # BOT SETUP
@@ -215,15 +165,10 @@ app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("reset", reset))
-
-# Admin commands
 app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("users", users))
-app.add_handler(CommandHandler("broadcast", broadcast))
 
-# Messages
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-print("🤖 AI Bot with Admin Panel is running...")
+print("🤖 Bot + Flask running...")
 
 app.run_polling()
